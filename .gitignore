@@ -1,0 +1,30 @@
+# Eclipse
+.project
+.classpath
+.settings/
+
+# Maven
+target/
+
+# Build output
+bin/
+
+# Logs
+logs/
+*.log
+
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Backup / temp
+*.tmp
+*.bak
+*.swp
+
+# Eclipse / Projekt-Müll
+.checkstyle
+
+# automatisch generierte Verzeichnislisten
+**/dir.txt
+**/tree.txt
