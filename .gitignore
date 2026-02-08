@@ -23,8 +23,22 @@ Thumbs.db
 *.swp
 
 # Eclipse / Projekt-Müll
+*.class
 .checkstyle
+
+# IntelliJ‑Artefakte
+.idea/
+*.iml
+
+# VSCode‑Artefakte
+.vscode/
+
+# Merge‑Konflikt‑Reste
+*.orig
 
 # automatisch generierte Verzeichnislisten
 **/dir.txt
 **/tree.txt
+
+# Mac Finder Metadata
+.AppleDouble

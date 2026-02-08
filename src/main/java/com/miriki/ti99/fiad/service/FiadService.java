@@ -12,19 +12,19 @@ import org.slf4j.LoggerFactory;
 
 // import com.miriki.ti99.dskimg.api.Ti99ImageService;
 // import com.miriki.ti99.dskimg.api.impl.Ti99ImageServiceImpl;
-import com.miriki.ti99.dskimg.Ti99DiskImage;
+// import com.miriki.ti99.dskimg.Ti99DiskImage;
 import com.miriki.ti99.dskimg.impl.Ti99DiskImageImpl;
-
-import com.miriki.ti99.dskimg.domain.DiskFormat;
+import com.miriki.ti99.dskimg.Ti99DiskImage;
 import com.miriki.ti99.dskimg.domain.DiskFormatPreset;
 import com.miriki.ti99.dskimg.domain.FileDescriptorRecord;
 import com.miriki.ti99.dskimg.domain.Ti99File;
 import com.miriki.ti99.dskimg.domain.Ti99FileSystem;
 import com.miriki.ti99.dskimg.domain.Ti99Image;
-import com.miriki.ti99.dskimg.domain.enums.FileType;
+// import com.miriki.ti99.dskimg.domain.enums.FileType;
 import com.miriki.ti99.dskimg.domain.enums.RecordFormat;
-import com.miriki.ti99.dskimg.domain.io.ImageFormatter;
-
+import com.miriki.ti99.dskimg.domain.io.FileNameIO;
+import com.miriki.ti99.dskimg.domain.io.Ti99FileIO;
+import com.miriki.ti99.dskimg.fs.FileWriter;
 import com.miriki.ti99.fiad.io.TiFilesHeader;
 
 public class FiadService {
@@ -43,14 +43,22 @@ public class FiadService {
     }
 
     public Path createDskFromFiad(Path fiadDir) throws IOException {
-        Path dskPath = fiadDir.resolveSibling(fiadDir.getFileName().toString() + ".dsk");
 
+        // 1. Name des FIAD-Verzeichnisses extrahieren
+        String baseName = fiadDir.getFileName().toString();
+
+        // 2. DSK-Dateiname daraus ableiten
+        Path dskPath = fiadDir.resolveSibling(baseName + ".dsk");
+
+        // 3. Image erzeugen
         DiskFormatPreset preset = DiskFormatPreset.TI_DSDD;
-        DiskFormat format = preset.getFormat();
+        String volumeName = FileNameIO.toTiVolumeName(fiadDir.getFileName().toString());
+        Ti99Image image = Ti99Image.createEmpty(preset, volumeName);
 
-        Ti99Image image = new Ti99Image(format);
-        ImageFormatter.initialize(image);
+        // 4. Volume-Name setzen
+        // image.getVolume().setName(baseName);
 
+        // 5. Dateien importieren
         try (Stream<Path> stream = Files.list(fiadDir)) {
             stream.filter(Files::isRegularFile).forEach(file -> {
                 try {
@@ -61,13 +69,17 @@ public class FiadService {
             });
         }
 
+        // 6. Image schreiben
         Files.write(dskPath, image.getRawData());
         log.trace("FIAD → DSK erzeugt: {}", dskPath);
+
         return dskPath;
     }
 
     public void importTiFile(Ti99Image image, Path hostFile) throws Exception {
         byte[] raw = Files.readAllBytes(hostFile);
+
+        Ti99FileSystem fs = Ti99DiskImageImpl.loadFileSystem(image);
 
         if (raw.length >= 128 && TiFilesHeader.isTiFilesHeader(raw)) {
             TiFilesHeader header = TiFilesHeader.parse(raw);
@@ -75,32 +87,21 @@ public class FiadService {
 
             Ti99File ti = new Ti99File();
             ti.setFileName(header.getFileName());
-            // ti.setType(Ti99FileIO.parseFileType(header.getFileType()));
-            if (header.getRecordLength() == 0) {
-                ti.setType(FileType.PGM);
-                ti.setFormat(RecordFormat.VAR);
-            } else {
-                ti.setType(header.isInternal() ? FileType.INT : FileType.DIS);
-                ti.setFormat(header.isVariable() ? RecordFormat.VAR : RecordFormat.FIX);
-            }
+            ti.setContent(content);
             ti.setRecordLength(header.getRecordLength());
             ti.setFlags(header.getFlags());
-            ti.setContent(content);
+            ti.setFormat(header.isVariable() ? RecordFormat.VAR : RecordFormat.FIX);
+            ti.setFileTypeLabel(header.getFileType());
 
-            log.info("TIFILES erkannt: {} → {} (Type={}, RecLen={}, Flags={})",
-                    hostFile.getFileName(),
-                    ti.getFileName(),
-                    ti.getType(),
-                    ti.getRecordLength(),
-                    ti.getFlags());
+            /*
+            FileDescriptorRecord fdr = new FileDescriptorRecord();
+            Ti99FileIO.writeFile(fs, fdr, ti);
+            */
+            ti.pack();
+            FileWriter.createFile(fs, ti);
+            Ti99DiskImageImpl.saveFileSystem(image, fs);
 
-            // FileImporter.importFile(image, ti);
-            // Ti99ImageService svc = new Ti99ImageServiceImpl(image);
-            // svc.importFile(ti);
-            Ti99DiskImage disk = new Ti99DiskImageImpl(image);
-            disk.writeFile(ti.getFileName(), ti.getContent(), ti.getType(), ti.getFormat(), ti.getRecordLength());   // oder writeFile(byte[]) je nach API
         } else {
-            log.info("Kein TIFILES-Header: {} → Import als PROGRAM", hostFile.getFileName());
             importAsProgram(image, hostFile);
         }
     }
@@ -108,21 +109,26 @@ public class FiadService {
     public void importAsProgram(Ti99Image image, Path hostFile) throws Exception {
         byte[] content = Files.readAllBytes(hostFile);
 
-        Ti99File tiFile = new Ti99File();
-        String baseName = hostFile.getFileName().toString().replaceAll("\\..*$", "").toUpperCase();
-        if (baseName.length() > 10) baseName = baseName.substring(0, 10);
+        Ti99FileSystem fs = Ti99DiskImageImpl.loadFileSystem(image);
 
-        tiFile.setFileName(baseName);
-        tiFile.setType(FileType.PGM);
-        tiFile.setFormat(RecordFormat.VAR);
-        tiFile.setRecordLength(0);
-        tiFile.setContent(content);
+        Ti99File ti = new Ti99File();
+        String rawName = hostFile.getFileName().toString(); // .replaceAll("\\..*$", "");
+        // if (baseName.length() > 10) baseName = baseName.substring(0, 10);
+        String baseName = FileNameIO.toTiFileName(rawName);
 
-        // FileImporter.importFile(image, tiFile);
-        // Ti99ImageService svc = new Ti99ImageServiceImpl(image);
-        // svc.importFile(tiFile);
-        Ti99DiskImage disk = new Ti99DiskImageImpl(image);
-        disk.writeFile(tiFile.getFileName(), tiFile.getContent(), tiFile.getType(), tiFile.getFormat(), tiFile.getRecordLength());   // oder writeFile(byte[]) je nach API
+        ti.setFileName(baseName);
+        ti.setContent(content);
+        ti.setRecordLength(0);
+        ti.setFlags(0);
+        ti.setFormat(RecordFormat.FIX);
+        ti.setFileTypeLabel("PROGRAM");
+
+        /*
+        FileDescriptorRecord fdr = new FileDescriptorRecord();
+        Ti99FileIO.writeFile(fs, fdr, ti);
+        */
+        FileWriter.createFile(fs, ti);
+        Ti99DiskImageImpl.saveFileSystem(image, fs);
     }
 
     public byte[] exportTiFile(Ti99DiskImage disk, String fileName) throws IOException {
@@ -141,7 +147,7 @@ public class FiadService {
                 .orElseThrow(() -> new IOException("File not found: " + fileName));
 
         // 4) Ti99File erzeugen
-        Ti99File file = com.miriki.ti99.dskimg.domain.io.Ti99FileIO.readFile(fs, fdr);
+        Ti99File file = Ti99FileIO.readFile(fs, fdr);
 
         // 5) Header erzeugen
         byte[] header = TiFilesHeader.build(file, fdr);
